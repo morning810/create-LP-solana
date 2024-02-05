@@ -6,60 +6,46 @@ const {
     MAINNET_PROGRAM_ID,
     TOKEN_PROGRAM_ID,
     MARKET_STATE_LAYOUT_V2,
+    LOOKUP_TABLE_CACHE,
     TxVersion,
+    buildSimpleTransaction,
 } = require('@raydium-io/raydium-sdk');
 const {
     clusterApiUrl,
     Keypair,
     Connection,
+    PublicKey,
+    VersionedTransaction,
+    LAMPORTS_PER_SOL
 } = require('@solana/web3.js');
+const {
+    getMint,
+} = require("@solana/spl-token");
+
 require("dotenv").config();
 
-
-const { buildAndSendTransactionList } = require("./utils");
-
 const PROGRAMIDS = DEVNET_PROGRAM_ID;
+const DEVNET_MODE = process.env.DEVNET_MODE === "true";
 const makeTxVersion = TxVersion.V0; // LEGACY
-
+const addLookupTableInfo = DEVNET_MODE ? undefined : LOOKUP_TABLE_CACHE;
 const endpoint = clusterApiUrl('devnet');
 const connection = new Connection(endpoint, 'confirmed');
 
 const payer = Keypair.fromSecretKey(bs58.decode(process.env.PAYER_SECRET_KEY));
 console.log("Payer:", payer.publicKey.toBase58());
 
-/**
- * step 1: make instructions
- * step 2: compose instructions to several transactions
- * step 3: send transactions
- */
-const createMarket = async () => {
-    // console.log(MARKET_STATE_LAYOUT_V2.span, await connection.getMinimumBalanceForRentExemption(MARKET_STATE_LAYOUT_V2.span));
-    // console.log(5120 + 12, await connection.getMinimumBalanceForRentExemption(5120 + 12));
-    // console.log(262144 + 12, await connection.getMinimumBalanceForRentExemption(262144 + 12));
-    // console.log(65536 + 12, await connection.getMinimumBalanceForRentExemption(65536 + 12));
-    // console.log(65536 + 12, await connection.getMinimumBalanceForRentExemption(65536 + 12));
-
-    // const baseToken = new Token(TOKEN_PROGRAM_ID, "JBvoPaBwV6dstSYumhp42UegHMNW8dSnMFqhwJF6SqKB", 9); // 
-    const baseToken = new Token(TOKEN_PROGRAM_ID, process.env.TOKEN_ADDRESS, 9); //
-    const quoteToken = new Token(TOKEN_PROGRAM_ID, "So11111111111111111111111111111111111111112", 9, "WSOL", "WSOL");
-    
-    // -------- step 1: make instructions --------
-    const { innerTransactions, address } = await MarketV2.makeCreateMarketInstructionSimple({
-        connection,
-        wallet: payer.publicKey,
-        baseInfo: baseToken,
-        quoteInfo: quoteToken,
-        lotSize: 1, // default 1
-        tickSize: 0.000001, // default 0.01
-        dexProgramId: PROGRAMIDS.OPENBOOK_MARKET,
-        makeTxVersion,
-    });
-    // console.log(innerTransactions);
-
-    await buildAndSendTransactionList(connection, makeTxVersion, innerTransactions, payer);
-    console.log("Created market id:", address.marketId.toBase58());
-}
-
+const sendAndConfirmTransactions = async (connection, payer, transactions) => {
+    for (const tx of transactions) {
+        let signature;
+        if (tx instanceof VersionedTransaction) {
+            tx.sign([payer]);
+            signature = await connection.sendTransaction(tx);
+        }
+        else
+            signature = await connection.sendTransaction(tx, [payer]);
+        await connection.confirmTransaction({ signature });
+    }
+};
 
 const createOpenBookMarket = async (mintAddress, minOrderSize, tickSize) => {
     console.log("Creating OpenBook market...", mintAddress);
@@ -94,5 +80,66 @@ const createOpenBookMarket = async (mintAddress, minOrderSize, tickSize) => {
     console.log("Market ID:", address.marketId.toBase58());
 };
 
-createOpenBookMarket(process.env.TOKEN_ADDRESS, 1, 0.000001);
-// createMarket();
+const createPool = async (mintAddress, tokenAmount, solAmount) => {
+    console.log("Creating pool...", mintAddress, tokenAmount, solAmount);
+
+    // const airdropSignature = await connection.requestAirdrop(payer.publicKey, 2 * LAMPORTS_PER_SOL);
+    // await connection.confirmTransaction({ signature: airdropSignature, ...(await connection.getLatestBlockhash()) });
+
+    const mint = new PublicKey(mintAddress);
+    const mintInfo = await getMint(connection, mint);
+    const baseToken = new Token(TOKEN_PROGRAM_ID, mintAddress, mintInfo.decimals);
+    const quoteToken = new Token(TOKEN_PROGRAM_ID, "So11111111111111111111111111111111111111112", 9, "WSOL", "WSOL");
+
+    const accounts = await Market.findAccountsByMints(connection, baseToken.mint, quoteToken.mint, PROGRAMIDS.OPENBOOK_MARKET);
+    if (accounts.length === 0) {
+        console.log("Not found OpenBook market!");
+        return;
+    }
+    const marketId = accounts[0].publicKey;
+
+    console.log("== MARKET_ID : ", marketId)
+
+    const startTime = Math.floor(Date.now() / 1000);
+    const baseAmount = xWeiAmount(tokenAmount, mintInfo.decimals);
+    const quoteAmount = xWeiAmount(solAmount, 9);
+    const walletTokenAccounts = await getWalletTokenAccount(connection, payer.publicKey);
+
+    const { innerTransactions, address } = await Liquidity.makeCreatePoolV4InstructionV2Simple({
+        connection,
+        programId: PROGRAMIDS.AmmV4,
+        marketInfo: {
+            marketId: marketId,
+            programId: PROGRAMIDS.OPENBOOK_MARKET,
+        },
+        baseMintInfo: baseToken,
+        quoteMintInfo: quoteToken,
+        baseAmount: baseAmount,
+        quoteAmount: quoteAmount,
+        startTime: new BN(startTime),
+        ownerInfo: {
+            feePayer: payer.publicKey,
+            wallet: payer.publicKey,
+            tokenAccounts: walletTokenAccounts,
+            useSOLBalance: true,
+        },
+        associatedOnly: false,
+        checkCreateATAOwner: true,
+        makeTxVersion: makeTxVersion,
+        feeDestinationId: DEVNET_MODE ? new PublicKey("3XMrhbv989VxAMi3DErLV9eJht1pHppW5LbKxe9fkEFR") : new PublicKey("7YttLkHDoNj9wyDur5pM1ejNaAvT9X4eqaYcHQqtj2G5"), // only mainnet use this
+    });
+
+    console.log("========================1")
+    const transactions = await buildSimpleTransaction({
+        connection: connection,
+        makeTxVersion: makeTxVersion,
+        payer: payer.publicKey,
+        innerTransactions: innerTransactions,
+        addLookupTableInfo: addLookupTableInfo,
+    });
+    console.log("========================2")
+    await sendAndConfirmTransactions(connection, payer, transactions);
+    console.log("AMM ID:", address.ammId.toBase58());
+};
+
+createOpenBookMarket("3HDRCpc5PdwrrJXNeamM9JTSEQTrCFPW6FULXj6muraK", 1, 0.000001);

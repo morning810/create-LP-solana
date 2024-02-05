@@ -39,7 +39,7 @@ console.log("Payer:", payer.publicKey.toBase58());
  * step 3: send transactions
  */
 const createPool = async () => {
-    const mint = new PublicKey("JBvoPaBwV6dstSYumhp42UegHMNW8dSnMFqhwJF6SqKB");
+    const mint = new PublicKey("3HDRCpc5PdwrrJXNeamM9JTSEQTrCFPW6FULXj6muraK");
     const mintInfo = await getMint(connection, mint);
     console.log("Mint Info:", mintInfo.supply, mintInfo.decimals);
 

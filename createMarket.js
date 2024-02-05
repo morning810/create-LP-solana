@@ -13,6 +13,9 @@ const {
     Keypair,
     Connection,
 } = require('@solana/web3.js');
+require("dotenv").config();
+
+
 const { buildAndSendTransactionList } = require("./utils");
 
 const PROGRAMIDS = DEVNET_PROGRAM_ID;
@@ -21,7 +24,7 @@ const makeTxVersion = TxVersion.V0; // LEGACY
 const endpoint = clusterApiUrl('devnet');
 const connection = new Connection(endpoint, 'confirmed');
 
-const payer = Keypair.fromSecretKey(bs58.decode('eK5jWERmFedYGd1DvQ9k2oBHPx8nGMt2raDBwbANutRKht2UWT3fxp3hNhUPbKD1pZor6XaFbmxvsi1wGqFXMGa'));
+const payer = Keypair.fromSecretKey(bs58.decode(process.env.PAYER_SECRET_KEY));
 console.log("Payer:", payer.publicKey.toBase58());
 
 /**
@@ -37,7 +40,7 @@ const createMarket = async () => {
     // console.log(65536 + 12, await connection.getMinimumBalanceForRentExemption(65536 + 12));
 
     // const baseToken = new Token(TOKEN_PROGRAM_ID, "JBvoPaBwV6dstSYumhp42UegHMNW8dSnMFqhwJF6SqKB", 9); // 
-    const baseToken = new Token(TOKEN_PROGRAM_ID, "6Y4yxbzG1iqBKN5yb5eZjhKCdLx2ELvAt1z34Eb426nz", 6); //
+    const baseToken = new Token(TOKEN_PROGRAM_ID, process.env.TOKEN_ADDRESS, 9); //
     const quoteToken = new Token(TOKEN_PROGRAM_ID, "So11111111111111111111111111111111111111112", 9, "WSOL", "WSOL");
     
     // -------- step 1: make instructions --------
@@ -57,4 +60,39 @@ const createMarket = async () => {
     console.log("Created market id:", address.marketId.toBase58());
 }
 
-createMarket();
+
+const createOpenBookMarket = async (mintAddress, minOrderSize, tickSize) => {
+    console.log("Creating OpenBook market...", mintAddress);
+
+    const mint = new PublicKey(mintAddress);
+    const mintInfo = await getMint(connection, mint);
+    console.log("=========== mintinfo: ", mintInfo);
+
+    const baseToken = new Token(TOKEN_PROGRAM_ID, mintAddress, mintInfo.decimals);
+    const quoteToken = new Token(TOKEN_PROGRAM_ID, "So11111111111111111111111111111111111111112", 9, "WSOL", "WSOL");
+    
+    const { innerTransactions, address } = await MarketV2.makeCreateMarketInstructionSimple({
+        connection,
+        wallet: payer.publicKey,
+        baseInfo: baseToken,
+        quoteInfo: quoteToken,
+        lotSize: minOrderSize, // default 1
+        tickSize: tickSize, // default 0.01
+        dexProgramId: PROGRAMIDS.OPENBOOK_MARKET,
+        makeTxVersion,
+    });
+
+    const transactions = await buildSimpleTransaction({
+        connection,
+        makeTxVersion,
+        payer: payer.publicKey,
+        innerTransactions,
+        addLookupTableInfo,
+    });
+
+    await sendAndConfirmTransactions(connection, payer, transactions);
+    console.log("Market ID:", address.marketId.toBase58());
+};
+
+createOpenBookMarket(process.env.TOKEN_ADDRESS, 1, 0.000001);
+// createMarket();

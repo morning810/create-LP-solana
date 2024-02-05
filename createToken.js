@@ -114,5 +114,5 @@ const createMetaData = async (mintAddress, name, symbol) => {
     await connection.confirmTransaction({ signature });
 };
 
-createToken(9, 1000000);
-createMetaData("CM7GmpZJRNba5JnGwYjYZfUZ9mAd1U65pTknkpRqmY26", "TTT-TOKEN", "TTT");
+// createToken(9, 1000000);
+createMetaData("3HDRCpc5PdwrrJXNeamM9JTSEQTrCFPW6FULXj6muraK", "T-TOKEN", "T");
